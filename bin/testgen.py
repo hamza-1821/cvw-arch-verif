@@ -66,7 +66,15 @@ def writeCovVector(desc, rs1, rs2, rd, rs1val, rs2val, immval, rdval, test, xlen
     rs1val = rs1val + 2**xlen
   if (rs2val < 0):
     rs2val = rs2val + 2**xlen
-  lines = lines + "li x" + str(rd) + ", " + formatstr.format(rdval) + " # initialize rd to a random value that should get changed; helps covering rd_toggle\n"
+  if (test in catype):
+    rd_c = legalizecompr(rd)
+    rs2_c = legalizecompr(rs2)
+    lines = lines + "li x" + str(rd_c) + ", " + formatstr.format(rdval) + " # initialize rd to a random value that should get changed; helps covering rd_toggle\n"
+  #  lines = lines + "li x" + str(rd_c) + ", " + formatstr.format(rs2val*2) + " # initialize rd to 2 times rs2val\n"
+    lines = lines + "li x" + str(rs2_c) + ", " + formatstr.format(rs2val) + " # initialize rs2\n"
+    lines = lines + test + " x" + str(rd_c) +", x" + str(rs2_c) + " # perform operation\n"
+  else:
+    lines = lines + "li x" + str(rd) + ", " + formatstr.format(rdval) + " # initialize rd to a random value that should get changed; helps covering rd_toggle\n"
   if (test in rtype):
     lines = lines + "li x" + str(rs1) + ", " + formatstr.format(rs1val) + " # initialize rs1\n"
     lines = lines + "li x" + str(rs2) + ", " + formatstr.format(rs2val) + " # initialize rs2\n"
@@ -345,6 +353,11 @@ def make_rd_corners(test, xlen, corners):
       [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
       desc = "cp_rd_corners (Test rd value = " + hex(v) + " Shifted by 1)"
       writeCovVector(desc, rs1, rs2, rd, -1, v, 1, rdval, test, xlen)
+  elif test in catype:
+    for v in corners:
+      [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+      desc = "cp_rd_corners (Test rd value = " + hex(v) + ")"
+      writeCovVector(desc, rs1, rs2, rd, rs1val, v, 0, v*2, test, xlen) 
   else:
     for v in corners:
       # rs1 = 0, rs2 = v, others are random
@@ -729,6 +742,7 @@ if __name__ == '__main__':
   c_shiftitype = ["c.slli","c.srli","c.srai"]
   crtype = ["c.add", "c.mv"]
   ciwtype = ["c.addi4spn"]
+  catype = ["c.sub"]
 
   floattypes = frtype + fstype + fltype + fcomptype + F2Xtype + fr4type + fitype + fixtype
   # instructions with all float args
