@@ -47,6 +47,12 @@ def unsignedImm6(imm):
     imm = 1
   return str(imm)
 
+def signedImm6(imm):
+  imm = imm % pow(2, 6)
+  if (imm & 0x20):
+    imm = imm - 0x40
+  return str(imm)
+
 def unsignedImm10(imm):
   imm = imm % pow(2, 10)
   # zero immediates are prohibited
@@ -54,7 +60,7 @@ def unsignedImm10(imm):
     imm = 16
   return str(imm)
 
-def writeCovVector(desc, rs1, rs2, rd, rs1val, rs2val, immval, rdval, test, xlen):
+def writeCovVector(desc, rs1, rs2, rd, rs1val, rs2val, immval, rdval, test, xlen, rs3=None, rs3val=None):
   lines = "\n# Testcase " + str(desc) + "\n"
   if (rs1val < 0):
     rs1val = rs1val + 2**xlen
@@ -65,15 +71,13 @@ def writeCovVector(desc, rs1, rs2, rd, rs1val, rs2val, immval, rdval, test, xlen
     lines = lines + "li x" + str(rs1) + ", " + formatstr.format(rs1val) + " # initialize rs1\n"
     lines = lines + "li x" + str(rs2) + ", " + formatstr.format(rs2val) + " # initialize rs2\n"
     lines = lines + test + " x" + str(rd) + ", x" + str(rs1) + ", x" + str(rs2) + " # perform operation\n" 
-  if (test in frtype):
-    lines = lines + "li x1, 0x4000 # *** factor this out to only run once at start of fp test\n"
-    lines = lines + "csrs mstatus, x1 # Turn on FPU with mstatus.FS\n"
+  elif (test in frtype):
     lines = lines + "la x2, scratch\n"
     lines = lines + "li x3, " + formatstr.format(rs1val) + " # prep fs1\n"
     lines = lines + "sw x3, 0(x2) # store fs1 value in memory\n"
     lines = lines + "flw f" + str(rs1) + ", 0(x2) # load fs1 value from memory\n"
     lines = lines + "li x4, " + formatstr.format(rs2val) + " # prep fs2\n"
-    lines = lines + "sw x3, 0(x2) # store fs2 value in memory\n"
+    lines = lines + "sw x4, 0(x2) # store fs2 value in memory\n"
     lines = lines + "flw f" + str(rs2) + ", 0(x2) # load fs2 value from memory\n"
     lines = lines + test + " f" + str(rd) + ", f" + str(rs1) + ", f" + str(rs2) + " # perform operation\n" 
   elif (test in citype):
@@ -83,7 +87,19 @@ def writeCovVector(desc, rs1, rs2, rd, rs1val, rs2val, immval, rdval, test, xlen
       rd = legalizecompr(rd)
       lines = lines + test + " sp, " + unsignedImm10(immval*16) + " # perform operation\n"
     else:
-      lines = lines + test + " x" + str(rd) + ", " + unsignedImm6(immval) + " # perform operation\n"
+      if test in ["c.li","c.addi"]:        # Add tests with signed Imm in the list
+        lines = lines + test + " x" + str(rd) + ", " + signedImm6(immval) + " # perform operation\n"
+      else:
+        lines = lines + test + " x" + str(rd) + ", " + unsignedImm6(immval) + " # perform operation\n"
+  elif (test in c_shiftitype):
+    if (test == "c.srli" or test == "c.srai"):
+        rd = legalizecompr(rd)
+    if shiftImm(immval, xlen) == "0":    # imm = 0 isn't allowed
+      imm = "1"
+    else:
+      imm = shiftImm(immval, xlen)
+    lines = lines + "li x" + str(rd) + ", " + formatstr.format(rs2val)+"\n"
+    lines = lines + test + " x" + str(rd) + ", " + imm + " # perform operation\n" 
   elif (test in crtype):
     if ((test == "c.add" or test == "c.mv") and (rd == 0 or rs2 == 0)):
       rd = 10
@@ -149,38 +165,84 @@ def writeCovVector(desc, rs1, rs2, rd, rs1val, rs2val, immval, rdval, test, xlen
     lines = lines + "1:\n"
   elif (test in utype):#["lui", "auipc"]
     lines = lines + test + " x" + str(rd) + ", " + unsignedImm20(immval) + " # perform operation\n"
+  elif (test in fr4type): #["fmadd.s", "fmsub.s", "fnmadd.s", "fnmsub.s"]
+    lines = lines + "la x2, scratch\n"
+    lines = lines + "li x3, " + formatstr.format(rs1val) + " # prep fs1\n"
+    lines = lines + "sw x3, 0(x2) # store fs1 value in memory\n"
+    lines = lines + "flw f" + str(rs1) + ", 0(x2) # load fs1 value from memory\n"
+    lines = lines + "li x4, " + formatstr.format(rs2val) + " # prep fs2\n"
+    lines = lines + "sw x4, 0(x2) # store fs2 value in memory\n"
+    lines = lines + "flw f" + str(rs2) + ", 0(x2) # load fs2 value from memory\n"
+    lines = lines + "li x5, " + formatstr.format(rs3val) + " # prep fs3\n"
+    lines = lines + "sw x5, 0(x2) # store fs2 value in memory\n"
+    lines = lines + "flw f" + str(rs3) + ", 0(x2) # load fs2 value from memory\n"
+    lines = lines + test + " f" + str(rd) + ", f" + str(rs1) + ", f" + str(rs2) + ", f" + str(rs3) + " # perform operation\n"
   elif (test in fltype):#["flw"]
     while (rs1 == 0 or rs1 == rs2):
       rs1 = randint(1, 31)
-    lines = lines + "# set mstatus.FS to 01 to enable fp \n"
-    lines = lines + "li t0,0x4000\ncsrs mstatus, t0\n\n"
     lines = lines + "la x"       + str(rs1) + ", scratch" + " # base address \n"
     lines = lines + "addi x"     + str(rs1) + ", x" + str(rs1) + ", " + signedImm12(-immval) + " # sub immediate from rs1 to counter offset\n"
     lines = lines + "li x" + str(rs2) + ", " + formatstr.format(rs2val) + " # load immediate value into integer register\n"
     lines = lines + "sw x" + str(rs2) + ", " + signedImm12(immval) + "(x" + str(rs1) + ") # store value to memory\n"
     lines = lines +  test + " f" + str(rd)  + ", " + signedImm12(immval) + "(x" + str(rs1) + ") # perform operation\n" 
-  elif (test in fcomptype):
-    # TODO: fill out fcomp type to implement feq.s, flt.s, fle.s 
-    pass
+  elif (test in fstype):#["fsw"]
+    while (rs1 == 0): 
+      rs1 = randint(1, 31) 
+    tempreg = rs2 # for intermediate memory transactions 
+    while (tempreg == rs1):
+      tempreg = randint(1, 31)
+    lines = lines + "la x"       + str(rs1) + ", scratch" + " # base address \n"
+    lines = lines + "addi x"     + str(rs1) + ", x" + str(rs1) + ", " + signedImm12(-immval) + " # sub immediate from rs1 to counter offset\n"
+    lines = lines + "li x" + str(tempreg) + ", " + formatstr.format(rs2val) + " # load immediate value into integer register\n"
+    lines = lines + "sw x" + str(tempreg) + ", " + signedImm12(immval) + "(x" + str(rs1) + ") # store value to memory\n"
+    lines = lines + "flw f" + str(rs2)  + ", " + signedImm12(immval) + "(x" + str(rs1) + ") # load value into f register\n" 
+    lines = lines + test + " f" + str(rs2)  + ", " + signedImm12(immval) + "(x" + str(rs1) + ") # perform operation\n" 
+  elif (test in F2Xtype):#["fcvt.w.s", "fcvt.wu.s", "fmv.x.w"]
+    while (rs2 == rs1):
+      rs2 = randint(1, 31)
+    lines = lines + "la x" + str(rs2) + ", scratch" + " # base address \n"
+    lines = lines + "li x" + str(rs1) + ", " + formatstr.format(rs1val) + " # load immediate value into integer register\n"
+    lines = lines +  "sw x" + str(rs1) + ", " +  "0(x" + str(rs2) + ") # store value to memory\n"
+    lines = lines + "flw f" + str(rs1) + ", " +  "0(x" + str(rs2) + ") # load value into f register\n"
+    lines = lines + test + " x" + str(rd) + ", f" + str(rs1) + " # perform operation\n"
+  elif (test in fcomptype): # ["feq.s", "flt.s", "fle.s"]
+    lines = lines + "la x2, scratch\n"
+    lines = lines + "li x3, " + formatstr.format(rs1val) + " # prep fs1\n"
+    lines = lines + "sw x3, 0(x2) # store fs1 value in memory\n"
+    lines = lines + "flw f" + str(rs1) + ", 0(x2) # load fs1 value from memory\n"
+    lines = lines + "li x4, " + formatstr.format(rs2val) + " # prep fs2\n"
+    lines = lines + "sw x4, 0(x2) # store fs2 value in memory\n"
+    lines = lines + "flw f" + str(rs2) + ", 0(x2) # load fs2 value from memory\n"
+    lines = lines + test + " x" + str(rd) + ", f" + str(rs1) + ", f" + str(rs2) + " # perform fcomp-type op\n"
   else:
-    pass
-    #print("Error: %s type not implemented yet" % test)
+    print("Error: %s type not implemented yet" % test)
   f.write(lines)
 
-def writeHazardVector(desc, rs1a, rs2a, rda, rs1b, rs2b, rdb, test):
-  # consecutive R-type instructions to trigger hazards
-  if test in frtype:
-    reg = "f"
-  else: 
-    reg = "x"
+def writeHazardVector(desc, rs1a, rs2a, rda, rs1b, rs2b, rdb, test, regconfig="xxxx", rs3a=None, rs3b=None):
+  # consecutive R-type instructions to trigger hazards                           ^~~~~~~~~ the types of the registers {rd, rs1, rs2, rs3} (x for int, f for float)
+  reg0 = regconfig[0]
+  reg1 = regconfig[1]
+  reg2 = regconfig[2]
+  reg3 = regconfig[3]
+
   lines = "\n# Testcase " + str(desc) + "\n"
-  lines = lines + test + " "+reg + str(rda) + ", "+reg + str(rs1a) + ", "+reg + str(rs2a) + " # perform first operation\n" 
-  lines = lines + test + " "+reg + str(rdb) + ", "+reg + str(rs1b) + ", "+reg + str(rs2b) + " # perform second operation\n" 
+  if (test in fr4type): 
+    lines = lines + test + " " + reg0 + str(rda) + ", " + reg1 + str(rs1a) + ", " + reg2 + str(rs2a) + ", " + reg3 + str(rs3a) + " # perform first operation\n" 
+    lines = lines + test + " " + reg0 + str(rdb) + ", " + reg1 + str(rs1b) + ", " + reg2 + str(rs2b) + ", " + reg3 + str(rs3b) + " # perform second operation\n" 
+  elif (test in fitype + fixtype):
+    lines = lines + test + " " + reg0 + str(rda) + ", " + reg1 + str(rs1a) +  " # perform first operation\n" 
+    lines = lines + test + " " + reg0 + str(rdb) + ", " + reg1 + str(rs1b) +  " # perform second operation\n"
+  else:
+    lines = lines + test + " " + reg0 + str(rda) + ", " + reg1 + str(rs1a) + ", " + reg2 + str(rs2a) + " # perform first operation\n" 
+    lines = lines + test + " " + reg0 + str(rdb) + ", " + reg1 + str(rs1b) + ", " + reg2 + str(rs2b) + " # perform second operation\n" 
   f.write(lines)
 
-def randomize():
+def randomize(rs3=None):
     rs1 = randint(1, 31)
     rs2 = randint(1, 31)
+    if (rs3 is not None):
+      rs3 = randint(1, 31)
+      rs3val = randint(0, 2**xlen-1)
     # choose rd that is different than rs1 and rs2
     rd = rs1
     while (rd == rs1 or rd == rs2):
@@ -189,7 +251,8 @@ def randomize():
     rs2val = randint(0, 2**xlen-1)
     immval = randint(0, 2**xlen-1)
     rdval = randint(0, 2**xlen-1)
-    return [rs1, rs2, rd, rs1val, rs2val, immval, rdval]
+    if (rs3 is None): return [rs1, rs2, rd, rs1val, rs2val, immval, rdval]
+    else: return [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval]
 
 def make_rd(test, xlen):
   for r in range(32):
@@ -197,11 +260,29 @@ def make_rd(test, xlen):
     desc = "cp_rd (Test destination rd = x" + str(r) + ")"
     writeCovVector(desc, rs1, rs2, r, rs1val, rs2val, immval, rdval, test, xlen)
 
+def make_rdp(test, xlen):
+  for r in range(8,16):
+    [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+    desc = "cp_rdp (Test destination rd = x" + str(r) + ")"
+    writeCovVector(desc, rs1, rs2, r, rs1val, rs2val, immval, rdval, test, xlen)
+
 def make_fd(test, xlen):
   for r in range(32):
-    [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+    [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval] = randomize(rs3=True)
     desc = "cp_fd (Test destination fd = x" + str(r) + ")"
-    writeCovVector(desc, rs1, rs2, r, rs1val, rs2val, immval, rdval, test, xlen)
+    writeCovVector(desc, rs1, rs2, r, rs1val, rs2val, immval, rdval, test, xlen, rs3=rs3, rs3val=rs3val)
+
+def make_fs1(test, xlen):
+  for r in range(32):
+    [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval] = randomize(rs3=True)
+    desc = "cp_fs1 (Test source fs1 = f" + str(r) + ")"
+    writeCovVector(desc, r, rs2, rd, rs1val, rs2val, immval, rdval, test, xlen, rs3=rs3, rs3val=rs3val)
+
+def make_fs2(test, xlen):
+  for r in range(32):
+    [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval] = randomize(rs3=True)
+    desc = "cp_fs2 (Test source fs2 = f" + str(r) + ")"
+    writeCovVector(desc, rs1, r, rd, rs1val, rs2val, immval, rdval, test, xlen, rs3=rs3, rs3val=rs3val)
 
 def make_rs1(test, xlen):
   for r in range(32):
@@ -226,7 +307,6 @@ def make_cp_rs1_nx0(test, xlen):
     [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
     desc = "cp_rs1_nx0 (Test source rs1 = x" + str(r) + ")"
     writeCovVector(desc, r, rs2, rd, rs1val, rs2val, immval, rdval, test, xlen)
-
 
 def make_rd_rs2(test, xlen):
   for r in range(32):
@@ -259,26 +339,41 @@ def make_rs2_corners(test, xlen):
     writeCovVector(desc, rs1, rs2, rd, rs1val, v, immval, rdval, test, xlen)
 
 def make_rd_corners(test, xlen, corners):
-  for v in corners:
-    # rs1 = 0, rs2 = v, others are random
-    [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
-    desc = "cp_rd_corners (Test rd value = " + hex(v) + ")"
-    writeCovVector(desc, rs1, 0, rd, v, rs2val, 0, rdval, test, xlen)
-    # rs1, rs2 = v, others are random
-    [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
-    desc = "cp_rd_corners (Test rd value = " + hex(v) + ")"
-    writeCovVector(desc, rs1, rs2, rd, v, v, v, rdval, test, xlen)
-    # rs1 = all 1s, rs2 = v, others are random
-    [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
-    desc = "cp_rd_corners (Test rd value = " + hex(v) + ")"
-    writeCovVector(desc, rs1, rs2, rd, -1, v, -1, rdval, test, xlen)
-
+  if test in c_shiftitype:
+    for v in corners:
+      # rs1 = all 1s, rs2 = v, others are random
+      [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+      desc = "cp_rd_corners (Test rd value = " + hex(v) + " Shifted by 1)"
+      writeCovVector(desc, rs1, rs2, rd, -1, v, 1, rdval, test, xlen)
+  else:
+    for v in corners:
+      # rs1 = 0, rs2 = v, others are random
+      [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+      desc = "cp_rd_corners (Test rd value = " + hex(v) + ")"
+      writeCovVector(desc, rs1, 0, rd, v, rs2val, 0, rdval, test, xlen)
+      # rs1, rs2 = v, others are random
+      [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+      desc = "cp_rd_corners (Test rd value = " + hex(v) + ")"
+      writeCovVector(desc, rs1, rs2, rd, v, v, v, rdval, test, xlen)
+      # rs1 = all 1s, rs2 = v, others are random
+      [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+      desc = "cp_rd_corners (Test rd value = " + hex(v) + ")"
+      writeCovVector(desc, rs1, rs2, rd, -1, v, -1, rdval, test, xlen)
 
 def make_rd_corners_auipc(test, xlen):
   for v in corners:
     [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
     desc = "cp_rd_corners_auipc (Test rd value = " + hex(v) + ")"
     writeCovVector(desc, rs1, rs2, rd,rs1val, rs2val, v, rdval, test, xlen)   
+
+
+def make_rd_corners_lui(test, xlen, corners):
+  for v in corners:
+    [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+    desc = "cp_rd_corners_lui (Test rd value = " + hex(v) + ")"
+    writeCovVector(desc, rs1, rs2, rd,rs1val, rs2val, v>>12, rdval, test, xlen)   
+
+
 
 def make_rd_rs1_eqval(test, xlen):
   [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
@@ -298,8 +393,8 @@ def make_rs1_rs2_eqval(test, xlen):
 def make_cp_gpr_hazard(test, xlen):
   for haz in ["raw", "waw", "war"]:
     for src in range(2):
-      [rs1a, rs2a, rda, rs1vala, rs2vala, immvala, rdvala] = randomize()
-      [rs1b, rs2b, rdb, rs1valb, rs2valb, immvalb, rdvalb] = randomize()
+      [rs1a, rs2a, rs3a, rda, rs1vala, rs2vala, rs3vala, immvala, rdvala] = randomize(rs3=True)
+      [rs1b, rs2b, rs3b, rdb, rs1valb, rs2valb, rs3valb, immvalb, rdvalb] = randomize(rs3=True)
       # set up hazard
       if (haz == "raw"):
         if (src):
@@ -314,7 +409,12 @@ def make_cp_gpr_hazard(test, xlen):
         else:
           rdb = rs1a
       desc = "cmp_gpr_hazard " + haz +  " test"
-      writeHazardVector(desc, rs1a, rs2a, rda, rs1b, rs2b, rdb, test)
+      regconfig = 'xxxx' # default to all int registers
+      if (test in regconfig_ffff):
+        regconfig = 'ffff'
+      if (test in regconfig_xfff):
+        regconfig = 'xfff'
+      writeHazardVector(desc, rs1a, rs2a, rda, rs1b, rs2b, rdb, test, regconfig=regconfig, rs3a=rs3a, rs3b=rs3b)
 
 def make_rs1_sign(test, xlen):
    for v in [1, -1]:
@@ -390,9 +490,48 @@ def make_cr_rs1_imm_corners(test, xlen):
 
 def make_imm_shift(test, xlen):
   desc = "cp_imm_shift"
-  for shift in range(0, xlen):
-    [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
-    writeCovVector(desc, rs1, rs2, rd, rs1val, rs2val, shift, rdval, test, xlen)
+  if test in c_shiftitype:
+    for shift in range(1, xlen):
+      [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+      writeCovVector(desc, rs1, rs2, rd, rs1val, rs2val, shift, rdval, test, xlen)
+  else:
+    for shift in range(0, xlen):
+      [rs1, rs2, rd, rs1val, rs2val, immval, rdval] = randomize()
+      writeCovVector(desc, rs1, rs2, rd, rs1val, rs2val, shift, rdval, test, xlen)
+
+def make_fd_fs1(test, xlen):
+  for r in range(32):
+    [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval] = randomize(rs3=True)
+    desc = "cmp_fd_fs1 (Test fd = fs1 = f" + str(r) + ")"
+    writeCovVector(desc, r, rs2, r, rs1val, rs2val, immval, rdval, test, xlen, rs3=rs3, rs3val=rs3val)
+
+def make_fd_fs2(test, xlen):
+  for r in range(32):
+    [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval] = randomize(rs3=True)
+    desc = "cmp_fd_fs2 (Test fd = fs2 = f" + str(r) + ")"
+    writeCovVector(desc, rs1, r, r, rs1val, rs2val, immval, rdval, test, xlen, rs3=rs3, rs3val=rs3val)
+
+def make_cr_fs1_fs2_corners(test, xlen):
+  for v1 in fcorners:
+    for v2 in fcorners:
+      # select distinct fs1 and fs2
+      [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval] = randomize(rs3=True)
+      while rs1 == rs2:
+        [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval] = randomize(rs3=True)
+      desc = "cr_fs1_fs2_corners (Test source fs1 = " + hex(v1) + " fs2 = " + hex(v2) + ")"
+      writeCovVector(desc, rs1, rs2, rd, v1, v2, immval, rdval, test, xlen, rs3=rs3, rs3val=rs3val)
+
+def make_fs1_corners(test, xlen):
+  for v in fcorners:
+    [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval] = randomize(rs3=True)
+    desc = "cp_fs1_corners (Test source fs1 value = " + hex(v) + ")"
+    writeCovVector(desc, rs1, rs2, rd, v, rs2val, immval, rdval, test, xlen, rs3=rs3, rs3val=rs3val)
+
+def make_fs2_corners(test, xlen):
+  for v in fcorners:
+    [rs1, rs2, rs3, rd, rs1val, rs2val, rs3val, immval, rdval] = randomize(rs3=True)
+    desc = "cp_fs2_corners (Test source fs2 value = " + hex(v) + ")"
+    writeCovVector(desc, rs1, rs2, rd, rs1val, v, immval, rdval, test, xlen, rs3=rs3, rs3val=rs3val)
 
 def write_tests(coverpoints, test, xlen):
   for coverpoint in coverpoints:
@@ -400,8 +539,18 @@ def write_tests(coverpoints, test, xlen):
       pass
     elif (coverpoint == "cp_rd"):
       make_rd(test, xlen)
+    elif (coverpoint == "cp_rdp"):
+      make_rdp(test, xlen)
     elif (coverpoint == "cp_fd"):
       make_fd(test, xlen)
+    elif (coverpoint == "cp_fs1"):
+      make_fs1(test, xlen)
+    elif (coverpoint == "cp_fs2"):
+      make_fs2(test, xlen)
+    elif (coverpoint == "cp_fs1_corners"):
+      make_fs1_corners(test, xlen)
+    elif (coverpoint == "cp_fs2_corners"):
+      make_fs2_corners(test, xlen)
     elif (coverpoint == "cp_rs1"):
       make_rs1(test, xlen)
     elif (coverpoint == "cp_rs2"):
@@ -418,6 +567,12 @@ def write_tests(coverpoints, test, xlen):
       make_rs1_corners(test, xlen)
     elif (coverpoint == "cp_rs2_corners"):
       make_rs2_corners(test, xlen)
+    elif (coverpoint == "cp_rd_corners_slli"):
+      make_rd_corners(test, xlen, c_slli_32_corners)
+    elif (coverpoint == "cp_rd_corners_srli"):
+      make_rd_corners(test, xlen, c_srli_32_corners)
+    elif (coverpoint == "cp_rd_corners_srai"):
+      make_rd_corners(test, xlen, c_srai_32_corners)
     elif (coverpoint == "cp_rd_corners"):
       make_rd_corners(test, xlen, corners)
     elif (coverpoint == "cp_rd_corners_lw" or coverpoint == "cp_rd_corners_lwu"):
@@ -426,8 +581,14 @@ def write_tests(coverpoints, test, xlen):
       make_rd_corners(test, xlen, corners_16bits)           # Make rd corners for lh and lhu for both RV32I & RV64I
     elif (coverpoint == "cp_rd_corners_lb" or coverpoint == "cp_rd_corners_lbu"):
       make_rd_corners(test, xlen, corners_8bits)            # Make rd corners for lb and lbu for both RV32I & RV64I
+    elif (coverpoint == "cp_rd_corners_6bit"):
+      make_rd_corners(test, xlen, corners_6bits)
+    elif (coverpoint == "cp_rd_corners_lui"):
+      make_rd_corners_lui(test, xlen, corners_20bits)            
     elif (coverpoint == "cp_rd_corners_auipc"):
       make_rd_corners_auipc(test, xlen)
+    elif (coverpoint == "cp_rd_corners_lui"):
+      make_rd_corners_lui(test, xlen)
     elif (coverpoint == "cp_rs1_nx0"):
       make_cp_rs1_nx0(test, xlen)
     elif (coverpoint == "cmp_rd_rs1_eqval"):
@@ -452,6 +613,8 @@ def write_tests(coverpoints, test, xlen):
       pass # already covered by cr_rs1_rs2_corners
     elif (coverpoint == "cp_gpr_hazard"):
       make_cp_gpr_hazard(test, xlen)
+    elif (coverpoint == "cp_fpr_hazard"):
+      make_cp_gpr_hazard(test, xlen)
     elif (coverpoint == "cp_rs1_toggle"):
       pass #TODO toggle not needed and seems to be covered by other things
     elif (coverpoint == "cp_rs2_toggle"):
@@ -462,11 +625,14 @@ def write_tests(coverpoints, test, xlen):
       pass #TODO toggle not needed and seems to be covered by other things
     elif (coverpoint == "cp_fd_toggle_lw"):
       pass #TODO toggle not needed and seems to be covered by other things
+    elif (coverpoint == "cp_rd_toggle_jal"):
+      pass #TODO toggle not needed and seems to be covered by other things
     elif (coverpoint == "cp_imm_sign"):
       make_imm_zero(test, xlen)
+    elif (coverpoint == "cp_imm_ones_zeros_jal"):
+      make_j_imm_ones_zeros(test, xlen)
     elif (coverpoint == "cp_imm_ones_zeros"):
-      if (test in jtype):
-        make_j_imm_ones_zeros(test, xlen)
+      pass 
     elif (coverpoint == "cp_mem_hazard"):
       make_mem_hazard(test, xlen)
     elif (coverpoint == "cp_f_mem_hazard"):
@@ -479,10 +645,28 @@ def write_tests(coverpoints, test, xlen):
       make_offset(test, xlen)
     elif (coverpoint == "cr_nord_rs1_rs2"):
       pass #TODO (not if crosses are not needed)
-    elif (coverpoint == "cp_imm_shift"):
+    elif (coverpoint == "cp_imm_shift" or coverpoint == "cp_imm_shift_c"):
       make_imm_shift(test, xlen)
+    elif (coverpoint == "cp_fd"):
+      make_fd(test, xlen)
+    elif (coverpoint == "cp_fs1"):
+      make_fs1(test, xlen)
+    elif (coverpoint == "cp_fs2"):
+      make_fs2(test, xlen)
+    elif (coverpoint == "cp_fs3"):
+      make_fs3(test, xlen)
     elif (coverpoint == "cp_rd_boolean"):
       pass # covered by other generators
+    elif (coverpoint == "cmp_fd_fs1"):
+      make_fd_fs1(test, xlen)
+    elif (coverpoint == "cmp_fd_fs2"):
+      make_fd_fs2(test, xlen)
+    elif (coverpoint == "cp_fs1_corners"):
+      make_fs1_corners(test, xlen)
+    elif (coverpoint == "cp_fs2_corners"):
+      make_fs2_corners(test, xlen)
+    elif (coverpoint == "cr_fs1_fs2_corners"):
+      make_cr_fs1_fs2_corners(test, xlen)
     else:
       print("Warning: " + coverpoint + " not implemented yet for " + test)
       
@@ -492,16 +676,21 @@ def getcovergroups(coverdefdir, coverfiles):
   for coverfile in coverfiles:
     coverfile = coverdefdir + "/" + coverfile + "_coverage.svh"
     f = open(coverfile, "r")
+    prev_line = "" 
     for line in f:
       m = re.search(r'cp_asm_count.*\"(.*)"', line)
       if (m):
 #        if (curinstr != ""):
 #          print(curinstr + ": " + str(coverpoints[curinstr]))
         curinstr = m.group(1)
+        #  If in a Zc* dir, curinstr name is on previous line
+        if (re.search(r'/RV..Zc.+_coverage', coverfile)):
+          curinstr = re.search(r'option.comment = "(.*)"', prev_line).group(1)
         coverpoints[curinstr] = []
       m = re.search("\s*(\S+) :", line)
       if (m):
         coverpoints[curinstr].append(m.group(1))
+      prev_line = line # Store for next iteration
     f.close()
     print(coverpoints)
     return coverpoints
@@ -529,18 +718,31 @@ if __name__ == '__main__':
   jalrtype = ["jalr"]
   utype = ["lui", "auipc"]
   fltype = ["flw"]
-  frtype = ["fadd.s"]
+  fstype = ["fsw"]
+  F2Xtype = ["fcvt.w.s", "fcvt.wu.s", "fmv.x.w"]
+  fr4type = ["fmadd.s", "fmsub.s", "fnmadd.s", "fnmsub.s"]
+  frtype = ["fadd.s", "fsub.s", "fmul.s", "fdiv.s", "fsgnj.s", "fsgnjn.s", "fsgnjx.s", "fmin.s", "fmax.s"]
+  fitype = ["fsqrt.s"]
+  fixtype = ["fclass.s"]
   fcomptype = ["feq.s", "flt.s", "fle.s"]
-  citype = ["c.lui", "c.li", "c.addi", "c.addi16sp", "c.slli"]
+  citype = ["c.lui", "c.li", "c.addi", "c.addi16sp"]
+  c_shiftitype = ["c.slli","c.srli","c.srai"]
   crtype = ["c.add", "c.mv"]
   ciwtype = ["c.addi4spn"]
-  # TODO: auipc missing, check whatelse is missing in ^these^ types
 
+  floattypes = frtype + fstype + fltype + fcomptype + F2Xtype + fr4type + fitype + fixtype
+  # instructions with all float args
+  regconfig_ffff = frtype + fr4type + fitype
+  # instructions with int first arg and the rest float args
+  regconfig_xfff = F2Xtype + fcomptype + fixtype
+
+  # TODO: auipc missing, check whatelse is missing in ^these^ types
 
   author = "David_Harris@hmc.edu"
   xlens = [32, 64]
   numrand = 3
   corners = []
+  fcorners = []
 
   # setup
   seed(0) # make tests reproducible
@@ -564,6 +766,32 @@ if __name__ == '__main__':
       corners = [0, 1, 2, 2**(xlen-1), 2**(xlen-1)+1, 2**(xlen-1)-1, 2**(xlen-1)-2, 2**xlen-1, 2**xlen-2]
       if (xlen == 32):
         corners = corners + [0b01011011101111001000100001110111, 0b10101010101010101010101010101010, 0b01010101010101010101010101010101]
+        fcorners = fcorners + [0x00000000,
+                               0x80000000,
+                               0x3f800000,
+                               0xbf800000,
+                               0x3fc00000,
+                               0xbfc00000,
+                               0x40000000,
+                               0xc0000000,
+                               0x00800000,
+                               0x80800000,
+                               0x7f7fffff,
+                               0xff7fffff,
+                               0x007fffff,
+                               0x807fffff,
+                               0x00400000,
+                               0x80400000,
+                               0x00000001, 
+                               0x80000001, 
+                               0x7f800000, 
+                               0xff800000, 
+                               0x7fc00000, 
+                               0x7fffffff, 
+                               0x7f800000, 
+                               0x7fbfffff, 
+                               0x7ef8654f, 
+                               0x813d9ab0]
       else:
         corners = corners + [0b0101101110111100100010000111011101100011101011101000011011110111, # random
                              0b1010101010101010101010101010101010101010101010101010101010101010, # walking odd
@@ -580,6 +808,24 @@ if __name__ == '__main__':
       corners_32bits = [0, 1, 2, 2**(31), 2**(31)+1, 2**(31)-1, 2**(31)-2, 2**32-1, 2**32-2,
                         0b10101010101010101010101010101010, 0b01010101010101010101010101010101,
                         0b01100011101011101000011011110111, 0b11100011101011101000011011110111]
+      corners_6bits = [0, 1, 2, 2**(5), 2**(5)+1, 2**(5)-1, 2**(5)-2, 2**(6)-1, 2**(6)-2,
+                        0b101010, 0b010101, 0b010110]
+      corners_20bits = [0,0b11111111111111111111000000000000,0b10000000000000000000000000000000,
+                        0b00000000000000000001000000000000,0b01001010111000100000000000000000]
+      c_slli_32_corners  = [0,1,0b01000000000000000000000000000000,0b00111111111111111111111111111111,
+                            0b01111111111111111111111111111111,0b01010101010101010101010101010101,
+                            0b00101101110111100100010000111011] 
+      c_srli_32_corners  = [0,2,4,0b11111111111111111111111111111110, 0b11111111111111111111111111111100,
+                            0b10101010101010101010101010101010,0b10110111011110010001000011101110]
+      c_srai_32_corners  = [0,2,4,0b11111111111111111111111111111110, 0b00110111011110010001000011101110]                   
+      
+      # TODO: DELETEME if this breaks something
+      fcorners = [0x00000000, 0x80000000, 0x3f800000, 0xbf800000, 0x3fc00000, 0xbfc00000, 0x40000000, 0xc0000000, 0x00800000, 
+                  0x80800000, 0x7f7fffff, 0xff7fffff, 0x007fffff, 0x807fffff, 0x00400000, 0x80400000, 0x00000001, 0x80000001, 
+                  0x7f800000, 0xff800000, 0x7fc00000, 0x7fffffff, 0x7f800000, 0x7fbfffff, 0x7ef8654f, 0x813d9ab0]
+
+      
+
 
       WALLY = os.environ.get('WALLY')
       pathname = WALLY+"/addins/cvw-arch-verif/tests/rv" + str(xlen) + "/"+extension+"/"
@@ -602,6 +848,11 @@ if __name__ == '__main__':
         h = open(WALLY+"/addins/cvw-arch-verif/templates/testgen_header.S", "r")
         for line in h:  
           f.write(line)
+
+        # add assembly lines to enable fp where needed
+        if test in floattypes:
+          float_en = "\n# set mstatus.FS to 01 to enable fp\nli t0,0x4000\ncsrs mstatus, t0\n\n"
+          f.write(float_en)
 
         # print directed and random test vectors
         # Coverage for R-type arithmetic instructions
